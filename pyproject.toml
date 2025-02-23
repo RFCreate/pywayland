@@ -2,7 +2,7 @@
 requires = [
     "setuptools>=62.4.0",
     "wheel",
-    "cffi>=1.12.0; platform_python_implementation != 'PyPy'",
+    "cffi @ git+https://github.com/python-cffi/cffi",
 ]
 build-backend = "setuptools.build_meta"
 
@@ -30,7 +30,7 @@ classifiers = [
     "Topic :: Software Development :: Libraries",
 ]
 dependencies = [
-    "cffi >= 1.12.0; platform_python_implementation != 'PyPy'",
+    "cffi @ git+https://github.com/python-cffi/cffi",
 ]
 dynamic = ["version"]
 
