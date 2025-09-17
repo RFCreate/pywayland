@@ -17,17 +17,17 @@ import mmap
 import os
 import sys
 
+from pywayland.client import Display
+from pywayland.protocol.wayland import WlCompositor, WlShell, WlShm
+from pywayland.protocol.xdg_shell import XdgWmBase
+from pywayland.utils import AnonymousFile
+
 this_file = os.path.abspath(__file__)
 this_dir = os.path.split(this_file)[0]
 root_dir = os.path.split(this_dir)[0]
 pywayland_dir = os.path.join(root_dir, "pywayland")
 if os.path.exists(pywayland_dir):
     sys.path.append(root_dir)
-
-from pywayland.client import Display  # noqa: E402
-from pywayland.protocol.wayland import WlCompositor, WlShell, WlShm  # noqa: E402
-from pywayland.utils import AnonymousFile  # noqa: E402
-from pywayland.protocol.xdg_shell.xdg_wm_base import XdgWmBase  # noqa: E402
 
 WIDTH = 480
 HEIGHT = 256
@@ -80,6 +80,7 @@ def registry_global_handler(registry, id_, interface, version):
     elif interface == "xdg_wm_base":
         window.wm_base = registry.bind(id_, XdgWmBase, version)
         window.wm_base.dispatcher["ping"] = wm_base_ping_handler
+
 
 def registry_global_remover(registry, id_):
     print(f"got a registry losing event for {id}")
@@ -135,6 +136,7 @@ def paint(window):
     # maybe reverse direction of progression
     if window.line_pos >= HEIGHT - MARGIN or window.line_pos <= MARGIN:
         window.line_speed = -window.line_speed
+
 
 def xdg_surface_configure_handler(xdg_surface, serial):
     xdg_surface.ack_configure(serial)

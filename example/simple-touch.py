@@ -19,20 +19,20 @@ import os
 import sys
 import tempfile
 
+from pywayland.client import Display
+from pywayland.protocol.wayland import (
+    WlCompositor,
+    WlSeat,
+    WlShell,
+    WlShm,
+)
+
 this_file = os.path.abspath(__file__)
 this_dir = os.path.split(this_file)[0]
 root_dir = os.path.split(this_dir)[0]
 pywayland_dir = os.path.join(root_dir, "pywayland")
 if os.path.exists(pywayland_dir):
     sys.path.append(root_dir)
-
-from pywayland.client import Display  # noqa: E402
-from pywayland.protocol.wayland import (  # noqa: E402
-    WlCompositor,
-    WlSeat,
-    WlShell,
-    WlShm,
-)
 
 
 def create_shm_buffer(touch, width, height):
