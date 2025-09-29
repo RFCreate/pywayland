@@ -23,7 +23,7 @@ from pywayland import ffi, lib
 from pywayland.utils import ensure_valid
 
 if TYPE_CHECKING:
-    from pywayland.server import Display
+    from pywayland.server import Display, Listener
 
 CallbackInfo = namedtuple("CallbackInfo", ["callback", "data"])
 
@@ -32,7 +32,7 @@ CallbackInfo = namedtuple("CallbackInfo", ["callback", "data"])
 
 # int (*wl_event_loop_fd_func_t)(int fd, uint32_t mask, void *data)
 @ffi.def_extern()
-def event_loop_fd_func(fd, mask, data_ptr) -> int:
+def event_loop_fd_func(fd: int, mask: int, data_ptr: ffi.CData) -> int:
     callback_info = ffi.from_handle(data_ptr)
 
     ret = callback_info.callback(fd, mask, callback_info.data)
@@ -44,7 +44,7 @@ def event_loop_fd_func(fd, mask, data_ptr) -> int:
 
 # int (*wl_event_loop_signal_func_t)(int signal_number, void *data)
 @ffi.def_extern()
-def event_loop_signal_func(signal_number, data_ptr) -> int:
+def event_loop_signal_func(signal_number: int, data_ptr: ffi.CData) -> int:
     callback_info = ffi.from_handle(data_ptr)
 
     ret = callback_info.callback(signal_number, callback_info.data)
@@ -56,7 +56,7 @@ def event_loop_signal_func(signal_number, data_ptr) -> int:
 
 # int (*wl_event_loop_timer_func_t)(void *data)
 @ffi.def_extern()
-def event_loop_timer_func(data_ptr):
+def event_loop_timer_func(data_ptr: ffi.CData) -> int:
     callback_info = ffi.from_handle(data_ptr)
 
     ret = callback_info.callback(callback_info.data)
@@ -68,7 +68,7 @@ def event_loop_timer_func(data_ptr):
 
 # void (void *data)
 @ffi.def_extern()
-def event_loop_idle_func(data_ptr):
+def event_loop_idle_func(data_ptr: ffi.CData) -> None:
     callback_info = ffi.from_handle(data_ptr)
 
     callback_info.callback(callback_info.data)
@@ -81,28 +81,35 @@ class EventSource:
     :type cdata: `ffi cdata`
     """
 
-    def __init__(self, eventloop, cdata):
+    def __init__(
+        self, eventloop: EventLoop, cdata: ffi.WlEventSourceCData | None
+    ) -> None:
         self._eventloop = eventloop
         self._ptr = cdata
 
-    def remove(self):
+    def remove(self) -> None:
         """Remove the callback from the event loop"""
-        if self._ptr is not None:
-            lib.wl_event_source_remove(self._ptr)
+        if self._ptr is None:
+            return
+        lib.wl_event_source_remove(self._ptr)
         self._ptr = None
 
     @ensure_valid
-    def check(self):
+    def check(self) -> None:
         """Insert the EventSource into the check list"""
+        if self._ptr is None:
+            return
         lib.wl_event_source_check(self._ptr)
 
     @ensure_valid
-    def timer_update(self, timeout):
+    def timer_update(self, timeout: int) -> None:
         """Set the timeout of the times callback
 
         :param timeout: Delay for timeout in ms
         :type timeout: `int`
         """
+        if self._ptr is None:
+            return
         lib.wl_event_source_timer_update(self._ptr, timeout)
 
 
@@ -125,18 +132,19 @@ class EventLoop:
 
     def __init__(self, display: Display | None = None) -> None:
         if display:
-            self._ptr: ffi.EventLoopCData | None = lib.wl_display_get_event_loop(
-                display._ptr
-            )
+            if display._ptr is not None:
+                self._ptr: ffi.WlEventLoopCData | None = lib.wl_display_get_event_loop(
+                    display._ptr
+                )
         else:
             # if we are creating an eventloop. we need to destroy it later
             ptr = lib.wl_event_loop_create()
             self._ptr = ffi.gc(ptr, lib.wl_event_loop_destroy)
 
         self.event_sources: WeakSet[EventSource] = WeakSet()
-        self._callback_handles: list = []
+        self._callback_handles: list[ffi.WlEventSourceCData] = []
 
-    def destroy(self):
+    def destroy(self) -> None:
         """Destroy the event loop"""
         if self._ptr is not None:
             for event_source in self.event_sources:
@@ -146,7 +154,13 @@ class EventLoop:
             self._ptr = None
 
     @ensure_valid
-    def add_fd(self, fd, callback, mask=FdMask.WL_EVENT_READABLE, data=None):
+    def add_fd(
+        self,
+        fd: int,
+        callback: CallbackInfo,
+        mask: int = FdMask.WL_EVENT_READABLE,
+        data: ffi.CData | None = None,
+    ) -> EventSource | None:
         """Add file descriptor callback
 
         Triggers function call when file descriptor state matches the mask.
@@ -160,10 +174,9 @@ class EventLoop:
         :param fd: File descriptor
         :type fd: `int`
         :param callback: Callback function
-        :type fd: function with callback `int(int fd, uint32_t mask, void
-                  *data)`
+        :type callback: function with callback `int(int fd, uint32_t mask, void *data)`
         :param mask: File descriptor mask
-        :type fd: `int`
+        :type mask: `int`
         :param data: User data to send to callback
         :type data: `object`
         :returns: :class:`EventSource` for specified callback
@@ -172,12 +185,14 @@ class EventLoop:
 
             :meth:`pywayland.server.eventloop.EventSource.check()`
         """
+        if self._ptr is None:
+            return None
         callback = CallbackInfo(callback=callback, data=data)
-        handle = ffi.new_handle(callback)
+        handle: ffi.WlEventSourceCData = ffi.new_handle(callback)
         self._callback_handles.append(handle)
 
         event_source_cdata = lib.wl_event_loop_add_fd(
-            self._ptr, fd, mask.value, lib.event_loop_fd_func, handle
+            self._ptr, fd, mask, lib.event_loop_fd_func, handle
         )
         event_source = EventSource(self, event_source_cdata)
         self.event_sources.add(event_source)
@@ -185,7 +200,12 @@ class EventLoop:
         return event_source
 
     @ensure_valid
-    def add_signal(self, signal_number, callback, data=None):
+    def add_signal(
+        self,
+        signal_number: int,
+        callback: CallbackInfo,
+        data: ffi.CData | None = None,
+    ) -> EventSource | None:
         """Add signal callback
 
         Triggers function call signal is received.
@@ -198,13 +218,15 @@ class EventLoop:
         :param signal_number: Signal number to trigger on
         :type signal_number: `int`
         :param callback: Callback function
-        :type fd: function with callback `int(int signal_number, void *data)`
+        :type callabck: function with callback `int(int signal_number, void *data)`
         :param data: User data to send to callback
         :type data: `object`
         :returns: :class:`EventSource` for specified callback
         """
+        if self._ptr is None:
+            return None
         callback = CallbackInfo(callback=callback, data=data)
-        handle = ffi.new_handle(callback)
+        handle: ffi.WlEventSourceCData = ffi.new_handle(callback)
         self._callback_handles.append(handle)
 
         event_source_cdata = lib.wl_event_loop_add_signal(
@@ -216,7 +238,11 @@ class EventLoop:
         return event_source
 
     @ensure_valid
-    def add_timer(self, callback, data=None):
+    def add_timer(
+        self,
+        callback: CallbackInfo,
+        data: ffi.CData | None = None,
+    ) -> EventSource | None:
         """Add timer callback
 
         Triggers function call after a specified time.
@@ -235,8 +261,10 @@ class EventLoop:
 
             :meth:`pywayland.server.eventloop.EventSource.timer_update()`
         """
+        if self._ptr is None:
+            return None
         callback = CallbackInfo(callback=callback, data=data)
-        handle = ffi.new_handle(callback)
+        handle: ffi.WlEventSourceCData = ffi.new_handle(callback)
         self._callback_handles.append(handle)
 
         event_source_cdata = lib.wl_event_loop_add_timer(
@@ -248,7 +276,11 @@ class EventLoop:
         return event_source
 
     @ensure_valid
-    def add_idle(self, callback, data=None):
+    def add_idle(
+        self,
+        callback: CallbackInfo,
+        data: ffi.CData | None = None,
+    ) -> EventSource | None:
         """Add idle callback
 
         :param callback: Callback function
@@ -256,8 +288,10 @@ class EventLoop:
         :param data: User data to send to callback
         :returns: :class:`EventSource` for specified callback
         """
+        if self._ptr is None:
+            return None
         callback = CallbackInfo(callback=callback, data=data)
-        handle = ffi.new_handle(callback)
+        handle: ffi.WlEventSourceCData = ffi.new_handle(callback)
         self._callback_handles.append(handle)
 
         event_source_cdata = lib.wl_event_loop_add_idle(
@@ -269,20 +303,28 @@ class EventLoop:
         return event_source
 
     @ensure_valid
-    def add_destroy_listener(self, listener):
+    def add_destroy_listener(self, listener: Listener) -> None:
         """Add a listener for the destroy signal
 
         :param listener: The listener object
         :type listener: :class:`~pywayland.server.Listener`
         """
+        if self._ptr is None:
+            return
+        if listener._ptr is None:
+            return
         lib.wl_event_loop_add_destroy_listener(self._ptr, listener._ptr)
 
     @ensure_valid
-    def dispatch(self, timeout):
+    def dispatch(self, timeout: int) -> None:
         """Dispatch callbacks on the event loop"""
+        if self._ptr is None:
+            return
         lib.wl_event_loop_dispatch(self._ptr, timeout)
 
     @ensure_valid
-    def dispatch_idle(self):
+    def dispatch_idle(self) -> None:
         """Dispatch idle callback on the event loop"""
+        if self._ptr is None:
+            return
         lib.wl_event_loop_dispatch_idle(self._ptr)

@@ -14,16 +14,23 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
 from operator import attrgetter
-from typing import Callable
+from typing import TYPE_CHECKING
 from weakref import WeakKeyDictionary
 
 from pywayland import ffi, lib
 
 from .argument import Argument, ArgumentType
 
-weakkeydict: WeakKeyDictionary = WeakKeyDictionary()
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+    from typing import Any, Callable
+
+    from pywayland.protocol_core import Proxy
+
+weakkeydict: WeakKeyDictionary[ffi.WlArgumentCData, tuple[ffi.CData, ...]] = (
+    WeakKeyDictionary()
+)
 
 
 class Message:
@@ -49,7 +56,10 @@ class Message:
     """
 
     def __init__(
-        self, func: Callable, arguments: list[Argument], version: int | None
+        self,
+        func: Callable[..., Any],
+        arguments: tuple[Argument, ...],
+        version: int | None,
     ) -> None:
         self.py_func = func
 
@@ -65,7 +75,13 @@ class Message:
                 yield Argument(ArgumentType.Uint)
             yield arg
 
-    def build_message_struct(self, wl_message_struct) -> tuple:
+    def build_message_struct(
+        self, wl_message_struct: ffi.WlMessageCData
+    ) -> tuple[
+        ffi.CharCData,
+        ffi.CharCData,
+        ffi.WlInterfaceCData,
+    ]:
         """Bulid the wl_message struct for this message
 
         :param wl_message_struct:
@@ -78,14 +94,14 @@ class Message:
         if self.version is not None:
             signature = f"{self.version}{signature}"
 
-        wl_message_struct.name = name = ffi.new("char[]", self.name.encode())
-        wl_message_struct.signature = cdata_signature = ffi.new(
-            "char[]", signature.encode()
-        )
-
-        wl_message_struct.types = types = ffi.new(
+        name: ffi.CharCData = ffi.new("char[]", self.name.encode())
+        wl_message_struct.name = name
+        cdata_signature: ffi.CharCData = ffi.new("char[]", signature.encode())
+        wl_message_struct.signature = cdata_signature
+        types: ffi.WlInterfaceCData = ffi.new(
             "struct wl_interface* []", len(list(self._marshaled_arguments))
         )
+        wl_message_struct.types = types
 
         for index, argument in enumerate(self._marshaled_arguments):
             if argument.interface is None:
@@ -96,7 +112,9 @@ class Message:
 
         return name, cdata_signature, types
 
-    def c_to_arguments(self, args_ptr):
+    def c_to_arguments(
+        self, args_ptr: ffi.WlArgumentCData
+    ) -> list[int | float | str | bytearray | Proxy[Any] | ffi.CData | None]:
         """Create a list of arguments
 
         Generate the arguments of the method from a CFFI cdata array of
@@ -107,9 +125,10 @@ class Message:
         :type args_ptr: cdata `union wl_argument []`
         :returns: list of args
         """
-        args = []
+        args: list[int | float | str | bytearray | Proxy[Any] | ffi.CData | None] = []
+        proxy_ptr: ffi.WlProxyCData
         for i, argument in enumerate(self.arguments):
-            arg_ptr = args_ptr[i]
+            arg_ptr: ffi.WlArgumentCData = args_ptr[i]
 
             # Match numbers (int, unsigned, float, file descriptor)
             if argument.argument_type == ArgumentType.Int:
@@ -136,6 +155,8 @@ class Message:
                     args.append(None)
                 else:
                     iface = argument.interface
+                    if iface is None:
+                        continue
                     proxy_ptr = ffi.cast("struct wl_proxy *", arg_ptr.o)
                     obj = iface.registry.get(proxy_ptr)
                     if obj is None:
@@ -165,7 +186,7 @@ class Message:
 
         return args
 
-    def arguments_to_c(self, *args):
+    def arguments_to_c(self, *args: Any) -> ffi.WlArgumentCData:
         """Create an array of `wl_argument` C structs
 
         Generate the CFFI cdata array of `wl_argument` structs that correspond
@@ -176,10 +197,10 @@ class Message:
         :returns: cdata `union wl_argument []` of args
         """
         nargs = len(list(self._marshaled_arguments))
-        args_ptr = ffi.new("union wl_argument []", nargs)
+        args_ptr: ffi.WlArgumentCData = ffi.new("union wl_argument []", nargs)
 
         arg_iter = iter(args)
-        refs = []
+        refs: list[ffi.CData] = []
         for i, argument in enumerate(self._marshaled_arguments):
             # New id (set to null for now, will be assigned on marshal)
             # Then, continue so we don't consume an arg
@@ -202,30 +223,32 @@ class Message:
             elif argument.argument_type == ArgumentType.FileDescriptor:
                 args_ptr[i].h = arg
             elif argument.argument_type == ArgumentType.String:
+                new_string: ffi.CharCData
                 if arg is None:
                     if not argument.nullable:
                         raise Exception
-                    new_arg = ffi.NULL
+                    new_string = ffi.NULL
                 else:
-                    new_arg = ffi.new("char []", arg.encode())
-                    refs.append(new_arg)
-                args_ptr[i].s = new_arg
+                    new_string = ffi.new("char []", arg.encode())
+                    refs.append(new_string)
+                args_ptr[i].s = new_string
             elif argument.argument_type == ArgumentType.Object:
+                new_obj: ffi.WlObjectCData
                 if arg is None:
                     if not argument.nullable:
                         raise Exception
-                    new_arg = ffi.NULL
+                    new_obj = ffi.NULL
                 else:
-                    new_arg = ffi.cast("struct wl_object *", arg._ptr)
-                    refs.append(new_arg)
-                args_ptr[i].o = new_arg
+                    new_obj = ffi.cast("struct wl_object *", arg._ptr)
+                    refs.append(new_obj)
+                args_ptr[i].o = new_obj
             elif argument.argument_type == ArgumentType.Array:
                 # TODO: this is a bit messy, we probably don't want to put everything in one buffer like this
-                new_arg = ffi.new("struct wl_array *")
-                new_data = ffi.new("void []", len(arg))
-                new_arg.alloc = new_arg.size = len(arg)
+                new_array: ffi.WlArrayCData = ffi.new("struct wl_array *")
+                new_data: ffi.CData = ffi.new("void []", len(arg))
+                new_array.alloc = new_array.size = len(arg)
                 ffi.buffer(new_data)[:] = arg
-                refs.append(new_arg)
+                refs.append(new_array)
                 refs.append(new_data)
 
         if len(refs) > 0:

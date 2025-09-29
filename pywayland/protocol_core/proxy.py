@@ -21,6 +21,10 @@ from pywayland.dispatcher import Dispatcher
 from pywayland.utils import ensure_valid
 
 if TYPE_CHECKING:
+    from typing import Any, Self
+
+    from pywayland.client import Display
+
     from .interface import Interface
 
     T = TypeVar("T", bound=Interface)
@@ -32,7 +36,9 @@ else:
 class Proxy(Generic[T]):
     interface: type[T]
 
-    def __init__(self, ptr, display=None):
+    def __init__(
+        self, ptr: ffi.WlProxyCData | None, display: Display | Self | None = None
+    ) -> None:
         """Represents a protocol object on the client side.
 
         A :class:`Proxy` acts as a client side proxy to an object existing in
@@ -40,7 +46,9 @@ class Proxy(Generic[T]):
         the proxy, which will in turn call the handler set with
         :func:`Proxy.add_listener`.
         """
-        self.user_data = None
+        self._ptr: ffi.WlProxyCData | None
+        self._display: Display | Self | None
+        self.user_data: Any = None
         self.dispatcher = Dispatcher(self.interface.events)
 
         # This should only be true for wl_display proxies, as they will
@@ -58,7 +66,8 @@ class Proxy(Generic[T]):
             raise ValueError(
                 "Non-Display Proxy objects must be associated to a Display"
             )
-        display._children.add(self)
+        if hasattr(display, "_children"):
+            display._children.add(self)
 
         if ptr == ffi.NULL:
             raise RuntimeError("Got a null pointer for the proxy")
@@ -68,7 +77,7 @@ class Proxy(Generic[T]):
         ptr = ffi.cast("struct wl_proxy *", ptr)
         self._ptr = ffi.gc(ptr, lib.wl_proxy_destroy)
 
-        self._handle = ffi.new_handle(self)
+        self._handle: ffi.CData = ffi.new_handle(self)
         lib.wl_proxy_add_dispatcher(
             self._ptr, lib.dispatcher_func, self._handle, ffi.NULL
         )
@@ -86,7 +95,7 @@ class Proxy(Generic[T]):
     def _destroy(self) -> None:
         """Frees the pointer associated with the Proxy"""
         if self._ptr is not None:
-            if self._display._ptr is not None:
+            if self._display and self._display._ptr is not None:
                 ffi.release(self._ptr)
             else:
                 self._ptr = ffi.gc(self._ptr, None)
@@ -95,24 +104,28 @@ class Proxy(Generic[T]):
     destroy = _destroy
 
     @ensure_valid
-    def _marshal(self, opcode, *args) -> None:
+    def _marshal(self, opcode: int, *args: Any) -> None:
         """Marshal the given arguments into the Wayland wire format"""
+        if self._ptr is None:
+            return None
         # Create a wl_argument array
         args_ptr = self.interface.requests[opcode].arguments_to_c(*args)
 
         # Write the event into the connection queue
-        proxy = ffi.cast("struct wl_proxy *", self._ptr)
+        proxy: ffi.WlProxyCData = ffi.cast("struct wl_proxy *", self._ptr)
         lib.wl_proxy_marshal_array(proxy, opcode, args_ptr)
 
     def _marshal_constructor(
-        self, opcode: int, interface: type[InterfaceT], *args
+        self, opcode: int, interface: type[InterfaceT], *args: Any
     ) -> Proxy[InterfaceT]:
         """Marshal the given arguments into the Wayland wire format for a constructor"""
+        if self._ptr is None:
+            raise RuntimeError("Proxy pointer is None")
         # Create a wl_argument array
         args_ptr = self.interface.requests[opcode].arguments_to_c(*args)
 
         # Write the event into the connection queue and build a new proxy from the given args
-        proxy = ffi.cast("struct wl_proxy *", self._ptr)
+        proxy: ffi.WlProxyCData = ffi.cast("struct wl_proxy *", self._ptr)
         proxy_ptr = lib.wl_proxy_marshal_array_constructor(
             proxy, opcode, args_ptr, interface._ptr
         )

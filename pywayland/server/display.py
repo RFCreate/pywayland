@@ -22,10 +22,12 @@ from pywayland.utils import ensure_valid
 from .eventloop import EventLoop
 
 if TYPE_CHECKING:
+    from types import TracebackType
+
     from typing_extensions import Literal
 
 
-def _full_display_gc(ptr: ffi.DisplayCData) -> None:
+def _full_display_gc(ptr: ffi.WlDisplayCData) -> None:
     """Destroy the Display cdata pointer, but only after destroying the clients"""
     lib.wl_display_destroy_clients(ptr)
     lib.wl_display_destroy(ptr)
@@ -34,19 +36,24 @@ def _full_display_gc(ptr: ffi.DisplayCData) -> None:
 class Display:
     """Create a Wayland Display object"""
 
-    def __init__(self, ptr=None) -> None:
+    def __init__(self, ptr: ffi.WlDisplayCData | None = None) -> None:
         if ptr is None:
             ptr = lib.wl_display_create()
             if ptr == ffi.NULL:
                 raise MemoryError("Unable to create wl_display object")
 
-        self._ptr = ffi.gc(ptr, _full_display_gc)
+        self._ptr: ffi.WlDisplayCData | None = ffi.gc(ptr, _full_display_gc)
 
     def __enter__(self) -> Display:
         """Use the Display in a context manager, which automatically destroys the Display"""
         return self
 
-    def __exit__(self, exc_type, exc_value, traceback) -> Literal[False]:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> Literal[False]:
         """Destroy the used display"""
         self.destroy()
         return False
@@ -73,7 +80,7 @@ class Display:
             self._ptr = None
 
     @ensure_valid
-    def add_socket(self, name: str | None = None) -> str:
+    def add_socket(self, name: str | None = None) -> str | None:
         """Add a socket to Wayland display for the clients to connect.
 
         This adds a Unix socket to Wayland display which can be used by clients
@@ -95,11 +102,13 @@ class Display:
         :param name: Name of the Unix socket.
         :type name: string or None
         """
+        if self._ptr is None:
+            return None
         if name is None:
             name_ptr = lib.wl_display_add_socket_auto(self._ptr)
             if name_ptr == ffi.NULL:
                 raise RuntimeError("Unable to create socket")
-            name = ffi.string(name_ptr)
+            name = ffi.string(name_ptr).decode()
         else:
             ret = lib.wl_display_add_socket(self._ptr, name.encode())
 
@@ -110,21 +119,25 @@ class Display:
         return name
 
     @ensure_valid
-    def get_serial(self) -> int:
+    def get_serial(self) -> int | None:
         """Get the current serial number
 
         This function returns the most recent serial number, but does not
         increment it.
         """
+        if self._ptr is None:
+            return None
         return lib.wl_display_get_serial(self._ptr)
 
     @ensure_valid
-    def next_serial(self) -> int:
+    def next_serial(self) -> int | None:
         """Get the next serial
 
         This function increments the display serial number and returns the new
         value.
         """
+        if self._ptr is None:
+            return None
         return lib.wl_display_next_serial(self._ptr)
 
     @ensure_valid
@@ -138,22 +151,28 @@ class Display:
     @ensure_valid
     def terminate(self) -> None:
         """Stop the display from running"""
+        if self._ptr is None:
+            return None
         lib.wl_display_terminate(self._ptr)
 
     @ensure_valid
     def run(self) -> None:
         """Run the display"""
+        if self._ptr is None:
+            return None
         lib.wl_display_run(self._ptr)
 
     @ensure_valid
     def init_shm(self) -> None:
         """Initialize shm for this display"""
+        if self._ptr is None:
+            return None
         ret = lib.wl_display_init_shm(self._ptr)
         if ret == -1:
             raise MemoryError("Unable to create shm for display")
 
     @ensure_valid
-    def add_shm_format(self, shm_format) -> None:
+    def add_shm_format(self, shm_format: int) -> None:
         """Add support for a Shm pixel format
 
         Add the specified :class:`~pywayland.protocol.wayland.WlShm.format`
@@ -171,9 +190,13 @@ class Display:
         :param shm_format: The shm pixel format to advertise
         :type shm_format: :class:`~pywayland.protocol.wayland.WlShm.format`
         """
-        lib.wl_display_add_shm_format(self._ptr, shm_format.value)
+        if self._ptr is None:
+            return None
+        lib.wl_display_add_shm_format(self._ptr, shm_format)
 
     @ensure_valid
     def flush_clients(self) -> None:
         """Flush client connections"""
+        if self._ptr is None:
+            return None
         lib.wl_display_flush_clients(self._ptr)
